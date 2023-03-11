@@ -4,7 +4,7 @@ The Node.JS library port of [IPATool](https://github.com/majd/ipatool).
 The update from IPATool will be made infrequently.
 
 See also:
-- Golang version (cli, origin): https://github.dev/majd/ipatool
+- Golang version (cli, origin): https://github.com/majd/ipatool
 - Python version (cli): https://github.com/NyaMisty/ipatool-py
 
 This is a **library for developers**, and will not provide any CLI interface.
