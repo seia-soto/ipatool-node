@@ -22,9 +22,9 @@ export enum Signatures {
 }
 
 export enum Errors {
-	InvalidAppleIdCredentials = 'IPA_INVALID_APPLE_ID_CREDENTIALS',
-	PasswordTokenExpired = 'IPA_PASSWORD_TOKEN_EXPIRED',
-	ServiceNotAvailable = 'IPA_SERVER_NOT_AVAILABLE',
+	InvalidAppleIdCredentials = 'IPATOOL_INVALID_APPLE_ID_CREDENTIALS',
+	PasswordTokenExpired = 'IPATOOL_AUTHORIZED_SESSION_EXPIRED',
+	ServiceNotAvailable = 'IPATOOL_SERVER_NOT_AVAILABLE',
 }
 
 /* eslint-disable @typescript-eslint/naming-convention */
@@ -281,10 +281,6 @@ export const signIn = async (
 	switch (data.failureType) {
 		case FailureTypes.InvalidCredentials: {
 			throw new Error(Errors.InvalidAppleIdCredentials);
-		}
-
-		case FailureTypes.PasswordTokenExpired: {
-			throw new Error(Errors.PasswordTokenExpired);
 		}
 
 		case FailureTypes.TemporarilyUnavailable: {
