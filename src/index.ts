@@ -639,9 +639,10 @@ export type PermitLicenseResponseSuccess = {
  * Permit license to acquire license metadata
  * @param instance The instance
  * @param appId The application identifier
+ * @param versionId The application version identifier
  * @returns The license metadata acquired from Apple server including to the download url of raw IPA and patch information
  */
-export const permitLicense = async (instance: Instance, appId: number) => {
+export const permitLicense = async (instance: Instance, appId: number, versionId = '0') => {
 	if (!instance.session) {
 		throw new Error(Errors.SessionUnavailable);
 	}
@@ -661,6 +662,7 @@ export const permitLicense = async (instance: Instance, appId: number) => {
 			creditDisplay: '',
 			guid: instance.machine.guid,
 			salableAdamId: appId,
+			appExtVrsId: versionId,
 		}),
 	});
 	const data = plist.parse(response.body) as PermitLicenseResponseFailed | PermitLicenseResponseSuccess;
