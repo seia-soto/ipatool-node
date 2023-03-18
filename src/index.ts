@@ -487,7 +487,7 @@ export type LookupResponseSuccess = {
  * @param instance The instance
  * @param country The country code that the app has been registered for; e.g. US
  * @param bundleId The bundle identifier of the app
- * @returns First entry from the app store
+ * @returns Entries from the app store
  */
 export const lookup = async (instance: Instance, country: keyof typeof storeFronts, bundleId: string, limits = 1) => {
 	const response = await instance.fetcher('lookup', {
@@ -497,6 +497,29 @@ export const lookup = async (instance: Instance, country: keyof typeof storeFron
 			limit: limits.toString(),
 			media: 'software',
 			bundleId,
+			country,
+		},
+	});
+	const data = JSON.parse(response.body) as LookupResponseSuccess;
+
+	return data.results;
+};
+
+/**
+ * Search an app with keyword and country code
+ * @param instance The instance
+ * @param country The country code that the app has been registered for; e.g. US
+ * @param keyword The keyword to search
+ * @returns Entries from the app store
+ */
+export const search = async (instance: Instance, country: keyof typeof storeFronts, keyword: string, limits = 1) => {
+	const response = await instance.fetcher('search', {
+		prefixUrl: Routes.iTunesApi,
+		searchParams: {
+			entity: 'software,iPadSoftware',
+			limit: limits.toString(),
+			media: 'software',
+			term: keyword,
 			country,
 		},
 	});
@@ -718,6 +741,10 @@ export const patchPayload = async (payload: Buffer, license: PermitLicenseRespon
 
 	writer.addFile('iTunesMetadata.plist', compileBinaryPlist(license.metadata));
 
+	if (!bundle) {
+		throw new Error(Errors.PayloadBundleNameUnavailable);
+	}
+
 	if (manifest) {
 		const payload = plist.parse(manifest.toString()) as {
 			SinfPaths: string[];
@@ -730,13 +757,9 @@ export const patchPayload = async (payload: Buffer, license: PermitLicenseRespon
 			}
 
 			// Explicit `Buffer.from` allows us to use stringified Buffer objects via JSON.stringify
-			writer.addFile(payload.SinfPaths[sinfEntry.id], Buffer.from(sinfEntry.sinf));
+			writer.addFile(`Payload/${bundle}.app/${payload.SinfPaths[sinfEntry.id]}`, Buffer.from(sinfEntry.sinf));
 		}
 	} else {
-		if (!bundle) {
-			throw new Error(Errors.PayloadBundleNameUnavailable);
-		}
-
 		if (!info) {
 			throw new Error(Errors.PayloadInfoUnavailable);
 		}
@@ -745,7 +768,7 @@ export const patchPayload = async (payload: Buffer, license: PermitLicenseRespon
 			CFBundleExecutable: string;
 		};
 
-		writer.addFile(`Payload/${bundle}/SC_Info/${payload.CFBundleExecutable}`, license.sinfs[0].sinf);
+		writer.addFile(`Payload/${bundle}/SC_Info/${payload.CFBundleExecutable}.sinf`, license.sinfs[0].sinf);
 	}
 
 	return writer.toBuffer();
