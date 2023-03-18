@@ -1,6 +1,6 @@
 {
   "name": "ipatool",
-  "version": "0.0.3",
+  "version": "0.0.3-a",
   "description": "The Node.JS library port of IPATool",
   "main": "out/index.js",
   "scripts": {

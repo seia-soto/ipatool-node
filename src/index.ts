@@ -714,7 +714,7 @@ export const patchPayload = async (payload: Buffer, license: PermitLicenseRespon
 		}
 	});
 
-	writer.addFile('iTunesMetadata.plist', compileBinaryPlist(license));
+	writer.addFile('iTunesMetadata.plist', compileBinaryPlist(license.metadata));
 
 	if (manifest) {
 		const payload = plist.parse(manifest.toString()) as {
