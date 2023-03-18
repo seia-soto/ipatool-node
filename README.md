@@ -31,7 +31,8 @@ if (isMfaRequired) {
 ### TODO
 
 - [x] Sign in
-- [ ] Purchase and download
+- [ ] Purchase
+- [x] Download
 - [ ] iTunes APIs for searching packages
 
 ## LICENSE

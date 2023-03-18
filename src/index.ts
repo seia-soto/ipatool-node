@@ -1,6 +1,9 @@
-import got, {type Got} from 'got';
+import got, {type ExtendOptions, type Got} from 'got';
+import path from 'path';
 import plist from 'plist';
 import {CookieJar} from 'tough-cookie';
+import {compileBinaryPlist} from './lib/bplist.js';
+import {createReaderFromBuffer, createWriterFromReader} from './lib/zip.js';
 
 export enum FailureTypes {
 	InvalidCredentials = '-5000',
@@ -10,10 +13,10 @@ export enum FailureTypes {
 }
 
 export enum Routes {
-	iTunesApi = 'itunes.apple.com',
-	AppStoreApi = 'buy.itunes.apple.com',
-	AppStoreApiWithAuthCode = 'p25-buy.itunes.apple.com',
-	AppStoreApiWithoutAuthCode = 'p71-buy.itunes.apple.com',
+	iTunesApi = 'https://itunes.apple.com',
+	AppStoreApi = 'https://buy.itunes.apple.com',
+	AppStoreApiWithAuthCode = 'https://p25-buy.itunes.apple.com',
+	AppStoreApiWithoutAuthCode = 'https://p71-buy.itunes.apple.com',
 }
 
 export enum Signatures {
@@ -22,9 +25,15 @@ export enum Signatures {
 }
 
 export enum Errors {
-	InvalidAppleIdCredentials = 'IPATOOL_INVALID_APPLE_ID_CREDENTIALS',
-	PasswordTokenExpired = 'IPATOOL_AUTHORIZED_SESSION_EXPIRED',
-	ServiceNotAvailable = 'IPATOOL_SERVER_NOT_AVAILABLE',
+	InvalidCredentials = 'IPATOOL_INVALID_CREDENTIALS',
+	ServiceUnavailable = 'IPATOOL_SERVICE_UNAVAILABLE',
+	SessionUnavailable = 'IPATOOL_SESSION_UNAVAILABLE',
+	SessionExpired = 'IPATOOL_SESSION_EXPIRED',
+	LicenseUnavailable = 'IPATOOL_LICENSE_UNAVAILABLE',
+	PayloadSinfUnavailable = 'IPATOOL_SINF_UNAVAILABLE',
+	PayloadInfoUnavailable = 'IPATOOL_INFO_UNAVAILABLE',
+	PayloadBundleNameUnavailable = 'IPATOOL_BUNDLENAME_UNAVAILABLE',
+	UnknownFailureType = 'IPATOOL_FAILURE_TYPE_',
 }
 
 /* eslint-disable @typescript-eslint/naming-convention */
@@ -170,13 +179,14 @@ export type Instance = {
 	machine: {
 		guid: string;
 	};
+	session?: {
+		directoryServicePersonId: string;
+		token: string;
+	};
 };
 
-export type InstanceSerialized = {
+export type InstanceSerialized = Omit<Instance, 'fetcher' | 'cookies'> & {
 	cookies: CookieJar.Serialized;
-	machine: {
-		guid: string;
-	};
 };
 
 /**
@@ -201,10 +211,34 @@ export const createGuid = (seed = 16384) => {
  * @returns Instance for future methods
  */
 export const createInstance = async (serializedInstance?: InstanceSerialized) => {
-	const cookieJar = serializedInstance?.cookies
-		? await CookieJar.deserialize(serializedInstance.cookies)
-		: new CookieJar();
+	const fetcherOptions: ExtendOptions = {
+		headers: {
+			'User-Agent': Signatures.HttpHeaderUserAgent,
+		},
+		ignoreInvalidCookies: true,
+	};
+
+	if (serializedInstance) {
+		const cookieJar = await CookieJar.deserialize(serializedInstance.cookies);
+		const fetcher = got.extend({
+			...fetcherOptions,
+			cookieJar,
+		});
+
+		const instance: Instance = {
+			...serializedInstance,
+			fetcher,
+			cookies: cookieJar,
+		};
+
+		return instance;
+	}
+
+	const cookieJar = new CookieJar(undefined, {
+		looseMode: true,
+	});
 	const fetcher = got.extend({
+		...fetcherOptions,
 		cookieJar,
 	});
 
@@ -212,7 +246,7 @@ export const createInstance = async (serializedInstance?: InstanceSerialized) =>
 		fetcher,
 		cookies: cookieJar,
 		machine: {
-			guid: serializedInstance?.machine.guid ?? createGuid(),
+			guid: createGuid(),
 		},
 	};
 
@@ -224,10 +258,110 @@ export const createInstance = async (serializedInstance?: InstanceSerialized) =>
  * @param instance The instance
  * @returns The object containing information to be deserialized with the `createInstance` method.
  */
-export const serializeInstance = async (instance: Instance) => ({
-	cookies: await instance.cookies.serialize(),
-	machine: instance.machine,
-});
+export const serializeInstance = async (instance: Instance) => {
+	const serialized: InstanceSerialized & Partial<Omit<Instance, 'cookies'>> = {
+		...instance,
+		cookies: await instance.cookies.serialize(),
+	};
+
+	delete serialized.fetcher;
+
+	return serialized as InstanceSerialized;
+};
+
+export type ResponseSignInFailed = {
+	pings: any[];
+	failureType: FailureTypes | string;
+	customerMessage: string;
+	'm-allowed': false;
+	'cancel-purchase-batch': boolean;
+};
+
+export type ResponseSignInSuccess = {
+	pings: any[];
+	accountInfo: {
+		appleId: string;
+		address: {
+			firstName: string;
+			lastName: string;
+		};
+	};
+	altDsid: string;
+	passwordToken: string;
+	clearToken: string;
+	'm-allowed': true;
+	'family-id': string;
+	dsPersonId: string;
+	creditDisplay: string;
+	creditBalance: string;
+	freeSongBalance: string;
+	isManagedStudent: boolean;
+	action: {
+		kind: string;
+	};
+	subscriptionStatus: {
+		terms: Array<{
+			type: string;
+			latestTerms: number;
+			agreedToTerms: number;
+			source: string;
+		}>;
+		account: {
+			isMinor: boolean;
+			suspectUnderage: boolean;
+		};
+		family: {
+			hasFamily: boolean;
+			hasFamilyGreaterThanOneMember: boolean;
+			isHoH: boolean;
+		};
+	};
+	accountFlags: {
+		personalization: boolean;
+		underThirteen: boolean;
+		identityLastVerified: number;
+		verifiedExpirationDate: number;
+		retailDemo: boolean;
+		autoPlay: boolean;
+		isDisabledAccount: boolean;
+		isRestrictedAccount: boolean;
+		isManagedAccount: boolean;
+		isInRestrictedRegion: boolean;
+		accountFlagsVersion: number;
+		isInBadCredit: boolean;
+		hasAgreedToTerms: boolean;
+		hasAgreedToAppClipTerms: boolean;
+		hasWatchHardwareOffer: boolean;
+		isInFamily: boolean;
+		hasSubscriptionFamilySharingEnabled: boolean;
+	};
+	status: number;
+	'download-queue-info': {
+		dsid: number;
+		'is-auto-download-machine': boolean;
+	};
+	privacyAcknowledgement: {
+		'com.apple.onboarding.podcasts': number;
+		'com.apple.onboarding.tvapp': number;
+		'com.apple.onboarding.ibooks': number;
+		'com.apple.onboarding.appstore': number;
+		'com.apple.onboarding.applemusic': number;
+		'com.apple.onboarding.itunesstore': number;
+		'com.apple.onboarding.itunesu': number;
+		'com.apple.onboarding.videos': number;
+		'com.apple.onboarding.appleid': number;
+		'com.apple.onboarding.applearcade': number;
+		'com.apple.onboarding.atve.tv': number;
+	};
+	dialog: {
+		'm-allowed': boolean;
+		message: string;
+		explanation: string;
+		defaultButton: string;
+		okButtonString: string;
+		initialCheckboxValue: boolean;
+	};
+};
 
 /**
  * Try to sign in with your Apple ID
@@ -250,11 +384,10 @@ export const signIn = async (
 		token: string;
 	},
 ) => {
-	const host = token ? Routes.AppStoreApiWithAuthCode : Routes.AppStoreApiWithoutAuthCode;
-	const response = await instance.fetcher.post(`https://${host}/WebObjects/MZFinance.woa/wa/authenticate`, {
+	const response = await instance.fetcher.post('WebObjects/MZFinance.woa/wa/authenticate', {
+		prefixUrl: token ? Routes.AppStoreApiWithAuthCode : Routes.AppStoreApiWithoutAuthCode,
 		headers: {
 			'Content-Type': 'application/x-www-form-urlencoded',
-			'User-Agent': Signatures.HttpHeaderUserAgent,
 		},
 		searchParams: {
 			guid: instance.machine.guid,
@@ -269,107 +402,349 @@ export const signIn = async (
 			why: 'signIn',
 		}),
 	});
-	const data = plist.parse(response.body) as {
-		// eslint-disable-next-line @typescript-eslint/ban-types
-		pings: [];
-		failureType: FailureTypes | string;
-		customerMessage: string;
-		'm-allowed': boolean;
-		'cancel-purchase-batch': boolean;
-	};
+	const data = plist.parse(response.body) as ResponseSignInFailed | ResponseSignInSuccess;
 
-	switch (data.failureType) {
-		case FailureTypes.InvalidCredentials: {
-			throw new Error(Errors.InvalidAppleIdCredentials);
+	if (!data['m-allowed']) {
+		if (!data.failureType && data.customerMessage === 'MZFinance.BadLogin.Configurator_message') {
+			return true;
 		}
 
-		case FailureTypes.TemporarilyUnavailable: {
-			throw new Error(Errors.ServiceNotAvailable);
-		}
+		switch (data.failureType) {
+			case FailureTypes.InvalidCredentials: {
+				throw new Error(Errors.InvalidCredentials);
+			}
 
-		default: {
-			if (data.failureType) {
-				throw new Error(`IPA_LOGIN_ERROR_${data.failureType}`);
+			case FailureTypes.TemporarilyUnavailable: {
+				throw new Error(Errors.ServiceUnavailable);
+			}
+
+			default: {
+				throw new Error(Errors.UnknownFailureType + data.failureType);
 			}
 		}
 	}
 
-	if (data.customerMessage === 'MZFinance.BadLogin.Configurator_message') {
-		if (!data.failureType) {
-			return true;
-		}
+	instance.session = {
+		directoryServicePersonId: data.dsPersonId,
+		token: data.passwordToken,
+	};
 
-		throw new Error(Errors.InvalidAppleIdCredentials);
-	}
+	return data;
+};
 
-	return false;
+export type LookupResponseSuccess = {
+	resultCount: number;
+	results: Array<{
+		artworkUrl512: string;
+		artistViewUrl: string;
+		artworkUrl60: string;
+		artworkUrl100: string;
+		screenshotUrls: string[];
+		ipadScreenshotUrls: string[];
+		appletvScreenshotUrls: string[];
+		isGameCenterEnabled: boolean;
+		features: any[];
+		advisories: any[];
+		supportedDevices: string[];
+		kind: string;
+		averageUserRating: number;
+		formattedPrice: string;
+		averageUserRatingForCurrentVersion: number;
+		userRatingCountForCurrentVersion: number;
+		trackContentRating: string;
+		minimumOsVersion: string;
+		languageCodesISO2A: any[];
+		fileSizeBytes: string;
+		sellerUrl: string;
+		trackCensoredName: string;
+		trackViewUrl: string;
+		contentAdvisoryRating: string;
+		releaseNotes: string;
+		artistId: number;
+		artistName: string;
+		genres: any[];
+		price: number;
+		description: string;
+		currency: string;
+		bundleId: string;
+		releaseDate: string;
+		primaryGenreName: string;
+		primaryGenreId: number;
+		isVppDeviceBasedLicensingEnabled: boolean;
+		sellerName: string;
+		genreIds: any[];
+		trackId: number;
+		trackName: string;
+		currentVersionReleaseDate: string;
+		version: string;
+		wrapperType: string;
+		userRatingCount: number;
+	}>;
 };
 
 /**
  * Look up an app with bundle identifier and country code
+ * @param instance The instance
  * @param country The country code that the app has been registered for; e.g. US
  * @param bundleId The bundle identifier of the app
  * @returns First entry from the app store
  */
-export const lookup = async (country: keyof typeof storeFronts, bundleId: string) => {
-	const response = await got(`https://${Routes.iTunesApi}/lookup`, {
+export const lookup = async (instance: Instance, country: keyof typeof storeFronts, bundleId: string, limits = 1) => {
+	const response = await instance.fetcher('lookup', {
+		prefixUrl: Routes.iTunesApi,
 		searchParams: {
 			entity: 'software,iPadSoftware',
-			limit: '1',
+			limit: limits.toString(),
 			media: 'software',
 			bundleId,
 			country,
 		},
 	});
-	const data = JSON.parse(response.body) as {
-		resultCount: number;
-		results: Array<{
-			artworkUrl512: string;
-			artistViewUrl: string;
-			artworkUrl60: string;
-			artworkUrl100: string;
-			screenshotUrls: any[];
-			ipadScreenshotUrls: any[];
-			appletvScreenshotUrls: any[];
-			isGameCenterEnabled: boolean;
-			features: any[];
-			advisories: any[];
-			supportedDevices: any[];
+	const data = JSON.parse(response.body) as LookupResponseSuccess;
+
+	return data.results;
+};
+
+export type PermitLicenseResponseFailed = {
+	pings: any[];
+	metrics: {
+		dialogId: string;
+		message: string;
+		messageCode: string;
+		options: string[];
+		actionUrl: string;
+		asnState: number;
+		eventType: string;
+	};
+	failureType: string;
+	customerMessage: string;
+	'm-allowed': boolean;
+	dialog: {
+		kind: string;
+		'm-allowed': boolean;
+		'use-keychain': boolean;
+		message: string;
+		explanation: string;
+		defaultButton: string;
+		okButtonString: string;
+		okButtonAction: {
 			kind: string;
-			averageUserRating: number;
-			formattedPrice: string;
-			averageUserRatingForCurrentVersion: number;
-			userRatingCountForCurrentVersion: number;
-			trackContentRating: string;
-			minimumOsVersion: string;
-			languageCodesISO2A: any[];
-			fileSizeBytes: string;
-			sellerUrl: string;
-			trackCensoredName: string;
-			trackViewUrl: string;
-			contentAdvisoryRating: string;
-			releaseNotes: string;
+			buyParams: string;
+			itemName: string;
+		};
+		cancelButtonString: string;
+		initialCheckboxValue: boolean;
+	};
+	'cancel-purchase-batch': boolean;
+};
+
+export type PermitLicenseResponseSuccess = {
+	pings: any[];
+	jingleDocType: string;
+	jingleAction: string;
+	status: number;
+	dsPersonId: string;
+	creditDisplay: string;
+	creditBalance: string;
+	freeSongBalance: string;
+	authorized: boolean;
+	'download-queue-item-count': number;
+	songList: Array<{
+		songId: number;
+		URL: string;
+		downloadKey: string;
+		artworkURL: string;
+		'artwork-urls': {
+			'image-type': string;
+			default: {
+				url: string;
+			};
+		};
+		md5: string;
+		chunks: {
+			chunkSize: number;
+			hashes: string[];
+		};
+		isStreamable: boolean;
+		uncompressedSize: string;
+		sinfs: Array<{
+			id: number;
+			sinf: Buffer;
+		}>;
+		purchaseDate: string;
+		'download-id': string;
+		'is-in-queue': boolean;
+		'asset-info': {
+			'file-size': number;
+			flavor: string;
+		};
+		metadata: {
+			MacUIRequiredDeviceCapabilities: {
+				arm64: boolean;
+			};
+			UIRequiredDeviceCapabilities: {
+				arm64: boolean;
+			};
+			WKRunsIndependentlyOfCompanionApp: boolean;
+			WKWatchOnly: boolean;
+			appleWatchEnabled: boolean;
 			artistId: number;
 			artistName: string;
-			genres: any[];
-			price: number;
-			description: string;
-			currency: string;
-			bundleId: string;
+			bundleDisplayName: string;
+			bundleShortVersionString: string;
+			bundleVersion: string;
+			copyright: string;
+			fileExtension: string;
+			gameCenterEnabled: boolean;
+			gameCenterEverEnabled: boolean;
+			genre: string;
+			genreId: number;
+			itemId: number;
+			itemName: string;
+			kind: string;
+			playlistName: string;
+			'product-type': string;
+			rating: {
+				content: string;
+				label: string;
+				rank: number;
+				system: string;
+			};
 			releaseDate: string;
-			primaryGenreName: string;
-			primaryGenreId: number;
-			isVppDeviceBasedLicensingEnabled: boolean;
-			sellerName: string;
-			genreIds: any[];
-			trackId: number;
-			trackName: string;
-			currentVersionReleaseDate: string;
-			version: string;
-			wrapperType: string;
-			userRatingCount: number;
-		}>;
+			requiresRosetta: boolean;
+			runsOnAppleSilicon: boolean;
+			runsOnIntel: boolean;
+			s: number;
+			'software-platform': string;
+			softwareIcon57x57URL: string;
+			softwareIconNeedsShine: boolean;
+			softwareSupportedDeviceIds: number[];
+			softwareVersionBundleId: string;
+			softwareVersionExternalIdentifier: number;
+			softwareVersionExternalIdentifiers: number[];
+			vendorId: number;
+			drmVersionNumber: number;
+			versionRestrictions: number;
+			hasOrEverHasHadIAP: boolean;
+		};
+	}>;
+	metrics: {
+		itemIds: number[];
+		currency: string;
+		exchangeRateToUSD: number;
 	};
+};
 
-	return data.results[0];
+/**
+ * Permit license to acquire license metadata
+ * @param instance The instance
+ * @param appId The application identifier
+ * @returns The license metadata acquired from Apple server including to the download url of raw IPA and patch information
+ */
+export const permitLicense = async (instance: Instance, appId: number) => {
+	if (!instance.session) {
+		throw new Error(Errors.SessionUnavailable);
+	}
+
+	const response = await instance.fetcher('WebObjects/MZFinance.woa/wa/volumeStoreDownloadProduct', {
+		prefixUrl: Routes.AppStoreApiWithoutAuthCode,
+		method: 'POST',
+		searchParams: {
+			guid: instance.machine.guid,
+		},
+		headers: {
+			'Content-Type': 'application/x-apple-plist',
+			'iCloud-DSID': instance.session.directoryServicePersonId,
+			'X-Dsid': instance.session.directoryServicePersonId,
+		},
+		body: plist.build({
+			creditDisplay: '',
+			guid: instance.machine.guid,
+			salableAdamId: appId,
+		}),
+	});
+	const data = plist.parse(response.body) as PermitLicenseResponseFailed | PermitLicenseResponseSuccess;
+
+	// @ts-expect-error This is used to determine the union type
+	const hasFailed = <T extends typeof data>(reflection: T): reflection is T & PermitLicenseResponseFailed => typeof reflection.failureType === 'string';
+
+	if (hasFailed(data)) {
+		switch (data.failureType) {
+			case FailureTypes.PasswordTokenExpired: {
+				throw new Error(Errors.SessionExpired);
+			}
+
+			case FailureTypes.LicenseNotFound: {
+				throw new Error(Errors.LicenseUnavailable);
+			}
+
+			default: {
+				throw new Error(Errors.UnknownFailureType + data.failureType);
+			}
+		}
+	}
+
+	return data;
+};
+
+/**
+ * Patch raw IPA using given metadata
+ * @param payload The raw IPA payload in Buffer; We never support streams as it's ZIP format
+ * @param license The license metadata
+ * @returns The patched IPA in Buffer
+ */
+export const patchPayload = async (payload: Buffer, license: PermitLicenseResponseSuccess['songList'][number]) => {
+	let manifest: Buffer | undefined;
+	let info: Buffer | undefined;
+	let bundle: string | undefined;
+
+	const reader = await createReaderFromBuffer(payload);
+	const writer = await createWriterFromReader(reader, async entry => {
+		if (entry.entryName.endsWith('.app/SC_Info/Manifest.plist')) {
+			manifest = entry.getData();
+
+			return;
+		}
+
+		if (entry.entryName.includes('.app/Info.plist')) {
+			if (entry.entryName.endsWith('.app/Info.plist') && !entry.entryName.includes('/Watch/')) {
+				// -'.app/Info.plist'.length
+				bundle = path.basename(entry.entryName.slice(0, -15));
+			}
+		}
+	});
+
+	writer.addFile('iTunesMetadata.plist', compileBinaryPlist(license));
+
+	if (manifest) {
+		const payload = plist.parse(manifest.toString()) as {
+			SinfPaths: string[];
+			SinfReplicationPaths: string[];
+		};
+
+		for (const sinfEntry of license.sinfs) {
+			if (!payload.SinfPaths[sinfEntry.id]) {
+				throw new Error(Errors.PayloadSinfUnavailable);
+			}
+
+			// Explicit `Buffer.from` allows us to use stringified Buffer objects via JSON.stringify
+			writer.addFile(payload.SinfPaths[sinfEntry.id], Buffer.from(sinfEntry.sinf));
+		}
+	} else {
+		if (!bundle) {
+			throw new Error(Errors.PayloadBundleNameUnavailable);
+		}
+
+		if (!info) {
+			throw new Error(Errors.PayloadInfoUnavailable);
+		}
+
+		const payload = plist.parse(info.toString()) as {
+			CFBundleExecutable: string;
+		};
+
+		writer.addFile(`Payload/${bundle}/SC_Info/${payload.CFBundleExecutable}`, license.sinfs[0].sinf);
+	}
+
+	return writer.toBuffer();
 };
