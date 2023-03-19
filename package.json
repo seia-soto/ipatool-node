@@ -4,7 +4,7 @@
   "description": "The Node.JS library port of IPATool",
   "main": "out/index.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc --project ./tsconfig.build.json",
     "exmaple:interactive": "ts-node-esm ./example/index.ts"
   },
   "type": "module",
