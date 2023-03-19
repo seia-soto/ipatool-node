@@ -17,13 +17,6 @@ This is a **library for developers**, and will not provide any CLI interface.
 
 See [interactive example](/example/index.ts).
 
-### TODO
-
-- [x] Sign in
-- [ ] Purchase
-- [x] Download
-- [ ] iTunes APIs for searching packages
-
 ## LICENSE
 
 This library is distributed under [MIT License](/LICENSE) which follows the original repository.

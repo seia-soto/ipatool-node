@@ -30,6 +30,7 @@ export enum Errors {
 	SessionUnavailable = 'IPATOOL_SESSION_UNAVAILABLE',
 	SessionExpired = 'IPATOOL_SESSION_EXPIRED',
 	LicenseUnavailable = 'IPATOOL_LICENSE_UNAVAILABLE',
+	LicenseAlreadyExists = 'IPATOOL_LICENSE_ALREADY_EXISTS',
 	PayloadSinfUnavailable = 'IPATOOL_SINF_UNAVAILABLE',
 	PayloadInfoUnavailable = 'IPATOOL_INFO_UNAVAILABLE',
 	PayloadBundleNameUnavailable = 'IPATOOL_BUNDLENAME_UNAVAILABLE',
@@ -656,6 +657,122 @@ export type PermitLicenseResponseSuccess = {
 		currency: string;
 		exchangeRateToUSD: number;
 	};
+};
+
+type PurchaseLicenseResponseSuccess = {
+	pings: any[];
+	jingleDocType: string;
+	jingleAction: string;
+	status: number;
+	dsPersonId: string;
+	creditDisplay: string;
+	creditBalance: string;
+	freeSongBalance: string;
+	authorized: boolean;
+	'download-queue-item-count': number;
+	songList: any[];
+	metrics: {
+		itemIds: number[];
+		price: number;
+		priceType: string;
+		productTypes: string[];
+		currency: string;
+		exchangeRateToUSD: number;
+		extractedCommerceEvent_latestLineItem_sapType: string;
+		commerceEvent_purchase_priceType: string;
+		commerceEvent_storeFrontId: string;
+		extractedCommerceEvent_latestLineItem_adamId: string;
+		extractedCommerceEvent_latestLineItem_currencyCodeISO3A: string;
+		commerceEvent_result_resultType: number;
+		extractedCommerceEvent_latestLineItem_amountPaid: number;
+		commerceEvent_flowType: number;
+		commerceEvent_flowStep: number;
+	};
+	duAnonymousPings: string[];
+	subscriptionStatus: {
+		terms: Array<{
+			type: string;
+			latestTerms: number;
+			agreedToTerms: number;
+			source: string;
+		}>;
+		account: {
+			isMinor: boolean;
+			suspectUnderage: boolean;
+		};
+		family: {
+			hasFamily: boolean;
+		};
+	};
+};
+
+type PurchaseLicenseResponseFailed = {
+	jingleDocType: string;
+	failureType: string;
+	status: number;
+};
+
+/**
+ * Purchase license
+ * @param instance The instance
+ * @param appId The application identifier
+ */
+export const purchaseLicense = async (instance: Instance, country: keyof typeof storeFronts, appId: number, isArcadeApp: boolean) => {
+	if (!instance.session) {
+		throw new Error(Errors.SessionUnavailable);
+	}
+
+	const response = await instance.fetcher('WebObjects/MZBuy.woa/wa/buyProduct', {
+		prefixUrl: Routes.AppStoreApi,
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/x-apple-plist',
+			'iCloud-DSID': instance.session.directoryServicePersonId,
+			'X-Dsid': instance.session.directoryServicePersonId,
+			'X-Apple-Store-Front': storeFronts[country],
+			'X-Token': instance.session.token,
+		},
+		body: plist.build({
+			appExtVrsId: '0',
+			hasAskedToFulfillPreorder: 'true',
+			buyWithoutAuthorization: 'true',
+			hasDoneAgeCheck: 'true',
+			guid: instance.machine.guid,
+			needDiv: '0',
+			origPage: `Software-${appId}`,
+			origPageLocation: 'Buy',
+			price: '0',
+			pricingParameters: isArcadeApp ? 'GAME' : 'STDQ',
+			productType: 'C',
+			salableAdamId: appId,
+		}),
+	});
+	const data = plist.parse(response.body) as PurchaseLicenseResponseSuccess | PurchaseLicenseResponseFailed;
+
+	// @ts-expect-error This is used to determine the union type
+	const hasFailed = <T extends typeof data>(reflection: T): reflection is T & PurchaseLicenseResponseFailed => typeof reflection.failureType === 'string' || data.jingleDocType !== 'purchaseSuccess' || reflection.status !== 0;
+
+	if (hasFailed(data)) {
+		if (data.status === 500) {
+			throw new Error(Errors.LicenseAlreadyExists);
+		}
+
+		switch (data.failureType) {
+			case FailureTypes.TemporarilyUnavailable: {
+				throw new Error(Errors.ServiceUnavailable);
+			}
+
+			case FailureTypes.PasswordTokenExpired: {
+				throw new Error(Errors.SessionExpired);
+			}
+
+			default: {
+				throw new Error(`${Errors.UnknownFailureType}${data.failureType}:${data.status}`);
+			}
+		}
+	}
+
+	return data;
 };
 
 /**

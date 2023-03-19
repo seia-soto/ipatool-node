@@ -98,9 +98,34 @@ export const getApplication = async (instance: ipatool.Instance) => {
 		break;
 	}
 
+	return {
+		country,
+		trackId,
+	};
+};
+
+const downloadOrPurchase = async (instance: ipatool.Instance, country: keyof typeof ipatool.storeFronts, trackId: number) => {
 	console.log('Fetching license');
 
-	const license = await ipatool.permitLicense(instance, trackId);
+	let license = await ipatool.permitLicense(instance, trackId)
+		.catch((error: Error) => {
+			if (error.message === ipatool.Errors.LicenseUnavailable) {
+				return false as const;
+			}
+
+			throw error;
+		});
+
+	if (!license) {
+		console.log('Acquiring license');
+
+		const response = await ipatool.purchaseLicense(instance, country, trackId, false);
+
+		console.log(JSON.stringify(response));
+
+		license = await ipatool.permitLicense(instance, trackId);
+	}
+
 	const entry = license.songList[0];
 
 	if (!entry) {
@@ -122,6 +147,7 @@ export const getApplication = async (instance: ipatool.Instance) => {
 
 (async () => {
 	const instance = await getSignedInstanceFromArchive() || await createSignedInstance();
+	const {country, trackId} = await getApplication(instance);
 
-	await getApplication(instance);
+	await downloadOrPurchase(instance, country, trackId);
 })();
